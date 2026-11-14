@@ -6,6 +6,19 @@ export function shuffle(values, random = Math.random) {
   for (let i = result.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [result[i], result[j]] = [result[j], result[i]]; }
   return result;
 }
+// Shuffling the candidates before checking eligibility samples eligible genres equally.
+// Stop once five complete genres are found to avoid reading every genre unnecessarily.
+export async function selectRandomPanelGenres(genreIds, loadGenre, used = {}, random = Math.random) {
+  const genres = [], pool = [];
+  for (const genreId of shuffle([...new Set(genreIds)], random)) {
+    const available = (await loadGenre(genreId)).filter(q => q.type === 'panel' && q.genreId === genreId && !used[q.id]);
+    const cells = [10, 20, 30].map(difficulty => available.find(q => q.difficulty === difficulty));
+    if (cells.some(q => !q)) continue;
+    genres.push(genreId); pool.push(...cells);
+    if (genres.length === 5) return { genres, pool };
+  }
+  throw new Error(`ランダム選択できるパネルジャンルが不足しています。10・20・30の未使用問題が揃うジャンルが5つ必要です（現在${genres.length}ジャンル）。`);
+}
 export function validateQuestion(q) {
   ensure(Object.hasOwn(TYPES, q.type), '形式が不正です。');
   ensure(typeof q.text === 'string' && q.text.trim().length > 0 && q.text.length <= 4000, '問題文は1〜4000文字です。');

@@ -41,6 +41,20 @@ test('Firebase adapter: provisioned code login → authoring → room → answer
   const final=await api.readRoom(code,'host');assert.equal(final.scores['service-p1'],20);assert.equal(final.stats['service-p1'].tf.correct,1);assert.equal(final.stats['service-p2'].tf.incorrect,1);
   await api.login('servicep1');const result=await api.readRoom(code,'results/service-p1');assert.equal(result.correct,1);assert.ok(!('score'in result));
   await api.login('hosttest');await api.backToLobby(code);assert.equal((await api.readRoom(code,'public')).phase,'waiting');assert.equal((await api.readRoom(code,'host')).used[pool[0].id],true);await api.resetHistory(code);assert.equal((await api.readRoom(code,'host')).used,undefined);
+  const completeGenres=[];
+  for(let i=0;i<5;i++){
+   const label=`random-${genreName}-${i}`;await api.createGenre(host.uid,label);const g=(await api.genres()).find(g=>g.name===label);completeGenres.push(g.id);
+   for(const difficulty of [10,20,30])await api.saveQuestion(host.uid,{type:'panel',text:`random panel ${i} ${difficulty}`,answer:'答',genreId:g.id,difficulty});
+  }
+  const randomConfig={...config,mode:'round',panelGenreMode:'random',genres:[]};
+  const prepared=await api.prepareGamePool(host.uid,randomConfig,2,{});
+  assert.deepEqual(new Set(prepared.config.genres),new Set(completeGenres));
+  assert.equal(prepared.pool.filter(q=>q.type==='panel').length,15);
+  assert.ok(!prepared.config.genres.includes(genre.id));
+  const consumed=prepared.pool.find(q=>q.type==='panel'&&q.difficulty===30);
+  await assert.rejects(api.prepareGamePool(host.uid,randomConfig,2,{[consumed.id]:true}),/現在4ジャンル/);
+  const manual=await api.prepareGamePool(host.uid,{...config,type:'panel',genres:completeGenres},2,{});
+  assert.deepEqual(manual.config.genres,completeGenres);assert.equal(manual.pool.length,15);
   await api.closeRoom(code);assert.equal(await api.readRoom(code,'meta'),null);
  }catch(e){console.error('SERVICE TEST FAILURE',e);throw e;}finally{try{goOffline(getDatabase(getApp()));await deleteApp(getApp());}catch{}await vite.close();await deleteAdminApp(admin);}
 });

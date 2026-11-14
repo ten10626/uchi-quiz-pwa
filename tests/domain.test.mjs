@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { credentials, normalizeCode, nameKey } from '../src/identity.js';
-import { startGame, reduceGame, publicView, ownResults, ranking, schedule, checkPool, validateQuestion } from '../src/domain.js';
+import { startGame, reduceGame, publicView, ownResults, ranking, schedule, checkPool, validateQuestion, selectRandomPanelGenres } from '../src/domain.js';
 const players=['p1','p2'];
 const config=(type,extra={})=>({mode:'single',type,count:1,cycles:1,genres:['a','b','c','d','e'],timer:false,seconds:30,buzzInput:'text',...extra});
 const q=(type,id=type,extra={})=>({id,type,text:`${type} secret question`,answer:type==='tf'?'true':'secret answer',options:['正解','誤答1','誤答2','誤答3'],genreId:['choice','panel'].includes(type)?'a':'',difficulty:type==='panel'?10:0,...extra});
@@ -23,3 +23,30 @@ test('abort keeps completed stats only, current question remains used across rem
 test('shortage includes all 15 required panel cells even if game selects fewer',()=>{const missing=checkPool(config('panel'),players,panels().slice(1));assert.equal(missing.length,1);assert.ok(missing[0].includes('10'));assert.throws(()=>game('panel',{genres:['a','a','b','c','d']}));});
 test('revision prevents duplicate host actions; ranks support ties and negative manual correction',()=>{let s=game('tf');s=reduceGame(s,{type:'score',uid:'p1',value:-10,expectedRevision:s.revision});assert.throws(()=>reduceGame(s,{type:'open',expectedRevision:s.revision-1}));assert.deepEqual(ranking({a:30,b:30,c:10}).map(v=>v.rank),[1,1,3]);});
 test('Firebase empty-object serialization does not break scoring or buzz',()=>{let s=game('buzz');delete s.stats;delete s.completed;delete s.current.banned;delete s.current.verdict;s=step(s,'open');s=step(s,'buzzWinner',{uid:'p1'});s=step(s,'buzzJudge',{correct:true});assert.equal(ownResults(s,'p1').correct,1);});
+
+const panelGenre = genreId => [10,20,30].map(difficulty => q('panel',`${genreId}-${difficulty}`,{genreId,difficulty}));
+test('random panel genres exclude incomplete and exhausted genres without marking assignments used',async()=>{
+ const ids=['missing','spent','a','b','c','d','e','f'],used={'spent-30':true},before=structuredClone(used),calls=[];
+ const chosen=await selectRandomPanelGenres(ids,async id=>{calls.push(id);return id==='missing'?panelGenre(id).slice(0,2):panelGenre(id);},used,()=>.999);
+ assert.deepEqual(chosen.genres,['a','b','c','d','e']);assert.equal(chosen.pool.length,15);assert.equal(calls.includes('f'),false);assert.deepEqual(used,before);
+ for(const id of chosen.genres)assert.deepEqual(chosen.pool.filter(q=>q.genreId===id).map(q=>q.difficulty),[10,20,30]);
+});
+test('random panel genres select five distinct genres with a fresh randomized order',async()=>{
+ const ids=['a','b','c','d','e','f','g','a'];
+ const first=await selectRandomPanelGenres(ids,async id=>panelGenre(id),{},()=>.999);
+ const second=await selectRandomPanelGenres(ids,async id=>panelGenre(id),{},()=>0);
+ assert.equal(new Set(first.genres).size,5);assert.equal(new Set(second.genres).size,5);assert.notDeepEqual(new Set(first.genres),new Set(second.genres));
+});
+test('random panel genres report insufficient complete genres instead of starting with missing cells',async()=>{
+ await assert.rejects(selectRandomPanelGenres(['a','b','c','d','incomplete'],async id=>id==='incomplete'?panelGenre(id).slice(0,1):panelGenre(id)),/現在4ジャンル/);
+ await assert.rejects(selectRandomPanelGenres([],async()=>[]),/現在0ジャンル/);
+});
+test('resolved random round setup freezes all 15 cells and is compatible with manual setup',async()=>{
+ const selected=await selectRandomPanelGenres(['a','b','c','d','e','f'],async id=>panelGenre(id),{},()=>0);
+ const pool=[...Array.from({length:6},(_,i)=>q('tf',`t${i}`)),...Array.from({length:6},(_,i)=>q('choice',`c${i}`)),...Array.from({length:8},(_,i)=>q('buzz',`b${i}`)),...selected.pool];
+ const resolved=config('tf',{mode:'round',panelGenreMode:'random',genres:selected.genres});
+ const s=startGame(null,resolved,players,pool,'random-round');
+ assert.deepEqual(s.config.genres,selected.genres);assert.equal(s.config.panelGenreMode,'random');assert.equal(s.rounds[3].board.length,15);
+ assert.ok(s.rounds[3].board.every(cell=>!s.used[cell.question.id]));
+ assert.deepEqual(checkPool({...resolved,panelGenreMode:'manual'},players,pool),[]);
+});

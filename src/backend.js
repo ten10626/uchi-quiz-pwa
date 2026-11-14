@@ -3,7 +3,7 @@ import { getAuth, setPersistence, browserLocalPersistence, signInWithEmailAndPas
 import { getFirestore, doc, collection, getDoc, getDocs, query, orderBy, limit, startAfter, startAt, endAt, where, runTransaction as fsTransaction, connectFirestoreEmulator } from 'firebase/firestore';
 import { getDatabase, ref, get, set, update, remove, onValue, onDisconnect, serverTimestamp, runTransaction, connectDatabaseEmulator } from 'firebase/database';
 import { credentials, nameKey } from './identity.js';
-import { validateQuestion, reduceGame, startGame, publicView, ownResults } from './domain.js';
+import { validateQuestion, reduceGame, startGame, publicView, ownResults, selectRandomPanelGenres } from './domain.js';
 const env = import.meta.env;
 export const configured = ['VITE_FIREBASE_API_KEY','VITE_FIREBASE_AUTH_DOMAIN','VITE_FIREBASE_PROJECT_ID','VITE_FIREBASE_DATABASE_URL','VITE_FIREBASE_APP_ID'].every(key=>!!env[key]);
 let auth, fs, db;
@@ -107,6 +107,17 @@ export async function drawPool(uid, config, playerCount, used) {
     return result.slice(0, count);
   }));
   return pools.flat();
+}
+export async function prepareGamePool(uid, config, playerCount, used = {}) {
+  if (config.mode !== 'round' || config.panelGenreMode !== 'random') {
+    return { config, pool: await drawPool(uid, config, playerCount, used) };
+  }
+  const genreCatalog = await genres();
+  const panel = await selectRandomPanelGenres(genreCatalog.map(g => g.id),
+    genreId => drawPool(uid, { mode:'single', type:'panel', genres:[genreId] }, playerCount, used), used);
+  const resolved = { ...config, genres:panel.genres };
+  const basePool = await drawPool(uid, { ...resolved, genres:[] }, playerCount, used);
+  return { config:resolved, pool:[...basePool, ...panel.pool], genreCatalog };
 }
 const path = (code, child = '') => `rooms/${code}${child ? '/' + child : ''}`;
 export const readRoom = async (code, child) => (await get(ref(db, path(code, child)))).val();
