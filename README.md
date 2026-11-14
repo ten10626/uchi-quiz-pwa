@@ -2,7 +2,7 @@
 
 スマホで司会／回答、○×・4択・早押し・パネル、単独／固定ラウンド制に対応するFirebase Spark用の初期実装です。フロントエンドはGitHub Pagesに配信します。Firebase Functions・Storage・課金設定は使用しません。
 
-**状態：実装・ローカル自動検証済み。本番接続、iPhone／Androidの実機確認、ホーム画面追加の実機検証は未完了です。** 確認用ブラウザの起動ツールがエラーになったため、画面を目視確認したとは扱っていません。詳細は [検証記録](docs/VALIDATION.md) を参照してください。
+**状態：本番インフラ設定・GitHub Pages公開済み。** 公開先は [うちクイズ](https://ten10626.github.io/uchi-quiz-pwa/)、ソースは [ten10626/uchi-quiz-pwa](https://github.com/ten10626/uchi-quiz-pwa) です。iPhone／Androidの実機確認、ホーム画面追加、画面の目視確認は未完了です。詳細は [検証記録](docs/VALIDATION.md) と [本番環境記録](docs/DEPLOYMENT.md) を参照してください。
 
 ## ファイル
 
@@ -94,6 +94,22 @@ npm run admin -- repair USER_UID
 Auth／Firestore／RTDBを跨ぐ原子的transactionは提供されません。失敗メッセージのUIDで修復してください。削除では作問原本を自動削除しません。ジャンルの参照件数が残るので、会員を削除する前に本人が不要な問題を削除してください。会員削除はルーム利用が終わってから実行してください。
 
 アプリ内にアカウント発行・削除・個人コード変更・端末追放機能はありません。
+
+### 秘密鍵を使わずFirebase CLIログインでPC管理する場合
+
+PCに `npx firebase login` でログイン済みなら、次の方法も使えます。OAuth認証情報は既存のFirebase CLIからメモリ内で利用し、秘密鍵やトークンをソースへ書き込みません。AuthはAdmin SDK、Firestore／RTDBの会員情報は管理用REST APIを使用します。
+
+```sh
+export GCLOUD_PROJECT='uchi-quiz-ten10626-261114'
+export FIREBASE_DATABASE_URL='https://uchi-quiz-ten10626-261114-default-rtdb.asia-southeast1.firebasedatabase.app'
+export QUIZ_USE_FIREBASE_LOGIN=true
+npm run admin -- add
+npm run admin -- list
+npm run admin -- init-admin USER_UID
+npm run admin -- delete USER_UID
+```
+
+この環境では `初回管理者を登録.command` をダブルクリックすると、初回専用の管理者登録を実行できます。最初に自分で決めた個人コードを入力してEnter、次に表示名を入力してEnterです。コードは画面に表示されません。初回フラグ `QUIZ_INITIAL_ADMIN=true` は既存会員がいる場合の実行を拒否し、最初の会員だけをジャンル管理者にします。通常の会員追加ではこのフラグを指定しません。
 
 ## 5. ローカル起動と遊び方
 
