@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function member() { return request.auth != null && exists(/databases/$(database)/documents/members/$(request.auth.uid)); }
+  function admin() { return member() && get(/databases/$(database)/documents/members/$(request.auth.uid)).data.admin == true; }
+  function genrePath(id) { return /databases/$(database)/documents/genres/$(id); }
+  function namePath(key) { return /databases/$(database)/documents/genreNames/$(key); }
+  function qPath(uid, id) { return /databases/$(database)/documents/users/$(uid)/questions/$(id); }
+  function beforeGenre(uid, id) { return exists(qPath(uid,id)) ? get(qPath(uid,id)).data.genreId : ''; }
+  function afterGenre(uid, id) { return existsAfter(qPath(uid,id)) ? getAfter(qPath(uid,id)).data.genreId : ''; }
+  function countChange(gid, delta, uid, qid) {
+    return gid == '' || (getAfter(genrePath(gid)).data.refs == get(genrePath(gid)).data.refs + delta
+      && getAfter(genrePath(gid)).data.mutation.uid == uid && getAfter(genrePath(gid)).data.mutation.qid == qid);
+  }
+  function questionCounts(uid, qid, before, after) {
+    return before == after || (countChange(before,-1,uid,qid) && countChange(after,1,uid,qid));
+  }
+  function validQuestion(q) {
+    return q.keys().hasOnly(['type','text','answer','options','genreId','difficulty','random','updatedAt','searchText'])
+      && q.type in ['tf','choice','buzz','panel'] && q.text is string && q.text.size() > 0 && q.text.size() <= 4000
+      && q.searchText is string && q.searchText.size() > 0 && q.searchText.size() <= 256
+      && q.random is number && q.random >= 0 && q.random < 1 && q.updatedAt is number
+      && q.genreId is string && q.difficulty is int
+      && (q.type in ['choice','panel'] ? q.genreId != '' && existsAfter(genrePath(q.genreId)) : q.genreId == '')
+      && (q.type == 'panel' ? q.difficulty in [10,20,30] : q.difficulty == 0)
+      && (q.type == 'choice' ? q.options is list && q.options.size() == 4
+          && q.options[0] is string && q.options[0].size() > 0 && q.options[0].size() <= 1000
+          && q.options[1] is string && q.options[1].size() > 0 && q.options[1].size() <= 1000
+          && q.options[2] is string && q.options[2].size() > 0 && q.options[2].size() <= 1000
+          && q.options[3] is string && q.options[3].size() > 0 && q.options[3].size() <= 1000
+        : q.answer is string && q.answer.size() > 0 && q.answer.size() <= 4000)
+      && (q.type != 'tf' || q.answer in ['true','false']);
+  }
+  match /members/{uid} { allow get: if member() && request.auth.uid == uid; }
+  match /users/{uid} {
+    allow get: if member() && request.auth.uid == uid;
+    allow create, update: if member() && request.auth.uid == uid && request.resource.data.keys().hasOnly(['name']) && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 30;
+    match /questions/{qid} {
+      allow read: if member() && request.auth.uid == uid;
+      allow create: if member() && request.auth.uid == uid && validQuestion(request.resource.data) && questionCounts(uid,qid,'',request.resource.data.genreId);
+      allow update: if member() && request.auth.uid == uid && validQuestion(request.resource.data) && request.resource.data.type == resource.data.type && request.resource.data.random == resource.data.random && questionCounts(uid,qid,resource.data.genreId,request.resource.data.genreId);
+      allow delete: if member() && request.auth.uid == uid && questionCounts(uid,qid,resource.data.genreId,'');
+    }
+  }
+  match /genres/{gid} {
+    allow read: if member();
+    allow create: if member() && request.resource.data.keys().hasOnly(['name','nameKey','owner','refs']) && request.resource.data.owner == request.auth.uid && request.resource.data.refs == 0
+      && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80
+      && request.resource.data.name.toUtf8().toHexString().lower() == request.resource.data.nameKey
+      && getAfter(namePath(request.resource.data.nameKey)).data.id == gid;
+    allow update: if member() && request.resource.data.owner == resource.data.owner && (
+      ((request.auth.uid == resource.data.owner || admin()) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','nameKey'])
+       && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80
+       && request.resource.data.name.toUtf8().toHexString().lower() == request.resource.data.nameKey
+      && getAfter(namePath(request.resource.data.nameKey)).data.id == gid && !existsAfter(namePath(resource.data.nameKey)))
+      || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['refs','mutation'])
+       && request.resource.data.mutation.keys().hasOnly(['uid','qid']) && request.resource.data.mutation.uid == request.auth.uid
+       && request.resource.data.refs is int && request.resource.data.refs >= 0
+       && ((beforeGenre(request.auth.uid,request.resource.data.mutation.qid) != gid && afterGenre(request.auth.uid,request.resource.data.mutation.qid) == gid && request.resource.data.refs == resource.data.refs + 1)
+         || (beforeGenre(request.auth.uid,request.resource.data.mutation.qid) == gid && afterGenre(request.auth.uid,request.resource.data.mutation.qid) != gid && request.resource.data.refs == resource.data.refs - 1)))
+    );
+    allow delete: if member() && (request.auth.uid == resource.data.owner || admin()) && resource.data.refs == 0 && !existsAfter(namePath(resource.data.nameKey));
+  }
+  match /genreNames/{key} {
+    allow read: if member();
+    allow create: if member() && request.resource.data.keys().hasOnly(['id']) && getAfter(genrePath(request.resource.data.id)).data.nameKey == key;
+    allow delete: if member() && (get(genrePath(resource.data.id)).data.owner == request.auth.uid || admin()) && (!existsAfter(genrePath(resource.data.id)) || getAfter(genrePath(resource.data.id)).data.nameKey != key);
+  }
+ }
+}
