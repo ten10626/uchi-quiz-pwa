@@ -50,3 +50,9 @@ export function installTextInputHandlers(doc, onChange) {
     doc.removeEventListener('input', input);
   };
 }
+
+export function tfBalance(counts={}) {
+  const circle=counts.true || 0,cross=counts.false || 0,total=circle+cross;
+  const circlePercent=total?Math.round(circle*100/total):0;
+  return {circle,cross,total,circlePercent,crossPercent:total?100-circlePercent:0};
+}

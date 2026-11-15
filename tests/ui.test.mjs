@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 const dom = new JSDOM('<div id="app"></div>', { url:'https://example.test/', pretendToBeVisual:true });
 globalThis.document=dom.window.document;globalThis.HTMLElement=dom.window.HTMLElement;globalThis.Node=dom.window.Node;
-const {patchView,restoreDrafts,installTextInputHandlers,questionSetting,panelColumnName}=await import('../src/ui.js');
+const {patchView,restoreDrafts,installTextInputHandlers,questionSetting,panelColumnName,tfBalance}=await import('../src/ui.js');
 const doc=dom.window.document,root=()=>doc.getElementById('app');
 beforeEach(()=>{doc.body.innerHTML='<div id="app"></div>';});
 test('genre search keeps the same focused input, Japanese text, caret and focus events during updates',()=>{
@@ -38,4 +38,10 @@ test('question list settings and repeated panel column labels are explicit',()=>
 });
 test('explicit save-and-continue reset clears the old question after editing ends',()=>{
  patchView(root(),'<form data-form="question"><textarea id="q-text">前の問題</textarea></form>');const input=doc.getElementById('q-text');input.focus();input.blur();patchView(root(),'<form data-form="question"><textarea id="q-text"></textarea></form>');assert.equal(doc.getElementById('q-text').value,'');
+});
+
+test('true/false balance shows counts and percentages including empty results',()=>{
+ assert.deepEqual(tfBalance({true:2,false:1}),{circle:2,cross:1,total:3,circlePercent:67,crossPercent:33});
+ assert.deepEqual(tfBalance({true:0,false:0}),{circle:0,cross:0,total:0,circlePercent:0,crossPercent:0});
+ assert.equal(tfBalance({false:4}).crossPercent,100);
 });

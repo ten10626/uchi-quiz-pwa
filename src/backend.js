@@ -55,7 +55,7 @@ export async function changeGenre(id, newName) {
 }
 function questionQuery(uid,filters={},cursor=null,pageSize=null) {
   const clauses=[];
-  for(const key of ['type','genreId','difficulty'])if(filters[key])clauses.push(where(key,'==',key==='difficulty'?Number(filters[key]):filters[key]));
+  for(const key of ['type','genreId','difficulty','answer'])if(filters[key])clauses.push(where(key,'==',key==='difficulty'?Number(filters[key]):filters[key]));
   clauses.push(orderBy('searchText'),orderBy('__name__'));
   const prefix=(filters.search || '').toLowerCase();
   if(cursor)clauses.push(startAfter(cursor));else if(prefix)clauses.push(startAt(prefix));
@@ -73,9 +73,19 @@ export async function panelQuestionCounts(uid,filters={}) {
   }));
   return counts;
 }
+export async function tfQuestionCounts(uid,filters={}) {
+  const counts={true:0,false:0};
+  if((filters.type && filters.type!=='tf') || filters.genreId || (filters.difficulty && Number(filters.difficulty)!==0))return counts;
+  await Promise.all(['true','false'].map(async answer=>{
+    if(filters.answer && filters.answer!==answer)return;
+    const result=await getCountFromServer(questionQuery(uid,{...filters,type:'tf',answer,genreId:'',difficulty:''}));
+    counts[answer]=result.data().count;
+  }));
+  return counts;
+}
 export async function questionPage(uid,cursor,filters={}) {
-  const [page,panelCounts]=await Promise.all([getDocs(questionQuery(uid,filters,cursor,25)),panelQuestionCounts(uid,filters)]);
-  return {items:page.docs.map(d=>({id:d.id,...d.data()})),cursor:page.docs.at(-1),more:page.size===25,panelCounts,filters:{...filters}};
+  const [page,panelCounts,tfCounts]=await Promise.all([getDocs(questionQuery(uid,filters,cursor,25)),panelQuestionCounts(uid,filters),tfQuestionCounts(uid,filters)]);
+  return {items:page.docs.map(d=>({id:d.id,...d.data()})),cursor:page.docs.at(-1),more:page.size===25,panelCounts,tfCounts,filters:{...filters}};
 }
 export async function saveQuestion(uid, question, deleting = false) {
   if (!deleting) validateQuestion(question);

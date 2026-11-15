@@ -35,7 +35,7 @@ test('Firebase adapter: provisioned code login → authoring → room → answer
   await set(ref(getDatabase(getApp()),`rooms/${code}/presence`),{online:true,at:serverTimestamp(),session:'service-session'});
   await api.command(code,{type:'open'});const pub=await api.readRoom(code,'public');assert.ok(!('answer'in pub.current));
   await api.login('servicep1');await api.submit(code,pub,'service-p1','true');
-  await assert.rejects(api.submit(code,pub,'service-p1','false'));await assert.rejects(api.readRoom(code,'host'));
+  await assert.rejects(api.submit(code,pub,'service-p1','false'));await assert.rejects(api.readRoom(code,'host'));await assert.rejects(api.tfQuestionCounts(host.uid,{type:'tf'}));
   await api.login('hosttest');await api.command(code,{type:'close'});const answers=await api.readRoom(code,`answers/${pub.current.token}`);
   await api.command(code,{type:'reveal',answers});await api.command(code,{type:'score',uid:'service-p1',value:20});await api.command(code,{type:'next'});
   const final=await api.readRoom(code,'host');assert.equal(final.scores['service-p1'],20);assert.equal(final.stats['service-p1'].tf.correct,1);assert.equal(final.stats['service-p2'].tf.incorrect,1);
@@ -76,6 +76,15 @@ test('Firebase adapter: provisioned code login → authoring → room → answer
   const twenties=await api.questionPage(host.uid,null,{...filter,difficulty:'20'});assert.equal(twenties.items.length,9);assert.deepEqual(twenties.panelCounts,{10:0,20:9,30:0});
   const prefix=await api.panelQuestionCounts(host.uid,{...filter,search:'集計 0'});assert.deepEqual(prefix,{10:10,20:0,30:0});
   assert.deepEqual(await api.panelQuestionCounts(host.uid,{type:'tf'}),{10:0,20:0,30:0});
+  for(let i=0;i<31;i++)await api.saveQuestion(host.uid,{type:'tf',text:`バランス ${String(i).padStart(2,'0')}`,answer:i<19?'true':'false',genreId:'',difficulty:0});
+  const tfFilter={type:'tf',search:'バランス'};
+  const tfFirst=await api.questionPage(host.uid,null,tfFilter);assert.equal(tfFirst.items.length,25);assert.deepEqual(tfFirst.tfCounts,{true:19,false:12});
+  const tfNext=await api.questionPage(host.uid,tfFirst.cursor,tfFirst.filters);assert.equal(tfNext.items.length,6);assert.deepEqual(tfNext.tfCounts,tfFirst.tfCounts);
+  assert.deepEqual(await api.tfQuestionCounts(host.uid,{type:'tf',search:'バランス 2'}),{true:0,false:10});
+  assert.deepEqual(await api.tfQuestionCounts(host.uid,{type:'panel'}),{true:0,false:0});
+  assert.deepEqual(await api.tfQuestionCounts(host.uid,{type:'tf',genreId:countGenre.id}),{true:0,false:0});
+  assert.deepEqual(await api.tfQuestionCounts(host.uid,{type:'tf',difficulty:'20'}),{true:0,false:0});
+  assert.deepEqual(await api.tfQuestionCounts(host.uid,{type:'tf',search:'該当なし'}),{true:0,false:0});
   await api.closeRoom(code);assert.equal(await api.readRoom(code,'meta'),null);
  }catch(e){console.error('SERVICE TEST FAILURE',e);throw e;}finally{try{goOffline(getDatabase(getApp()));await deleteApp(getApp());}catch{}await vite.close();await deleteAdminApp(admin);}
 });
