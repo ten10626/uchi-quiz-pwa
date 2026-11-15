@@ -11,7 +11,9 @@ export function patchView(root, html) {
         return false;
       }
       if (from.tagName === 'SELECT' && from.hasAttribute('data-genre-select')) return false;
-      return !from.isEqualNode(to);
+      // Equal HTML can still have dirty input/textarea values. Let morphdom
+      // synchronize live properties when the control is no longer being edited.
+      return true;
     }
   });
 }
@@ -55,4 +57,17 @@ export function tfBalance(counts={}) {
   const circle=counts.true || 0,cross=counts.false || 0,total=circle+cross;
   const circlePercent=total?Math.round(circle*100/total):0;
   return {circle,cross,total,circlePercent,crossPercent:total?100-circlePercent:0};
+}
+
+export function resetQuestionForm(form, drafts, type) {
+  const active=form?.ownerDocument.activeElement;
+  if(active && form?.contains(active))active.blur();
+  for(const input of form?.querySelectorAll('input,textarea,select') || []){
+    if(['q-type','q-genre'].includes(input.id))continue;
+    if(input.id==='q-difficulty')input.value='10';
+    else if(input.id==='q-answer' && type==='tf')input.value='true';
+    else input.value='';
+  }
+  // Blur/change may record the old value, so remove drafts after ending focus.
+  for(const key of drafts.keys())if(key.startsWith('q-'))drafts.delete(key);
 }

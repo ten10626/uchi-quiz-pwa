@@ -1,6 +1,6 @@
 import './style.css';
 import * as api from './backend.js';
-import { patchView, restoreDrafts, questionSetting, panelColumnName, installTextInputHandlers, tfBalance } from './ui.js';
+import { patchView, restoreDrafts, questionSetting, panelColumnName, installTextInputHandlers, tfBalance, resetQuestionForm } from './ui.js';
 import { TYPES, ranking, ownResults, checkPool, getRoundCounts } from './domain.js';
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -155,7 +155,9 @@ document.addEventListener('submit',e=>{e.preventDefault();const form=e.target.da
    const type=values['q-type'] || state.editing.type;
    const q={...(state.editing?.id?{id:state.editing.id}:{}),type,text:values['q-text'].trim(),genreId:values['q-genre'] || '',difficulty:type==='panel'?Number(values['q-difficulty']):0};
    if(type==='choice')q.options=[0,1,2,3].map(i=>values[`q-option-${i}`].trim());else q.answer=values['q-answer'];
-   await api.saveQuestion(state.user.uid,q);clearDrafts('q-');if(document.activeElement?.closest('form[data-form="question"]'))document.activeElement.blur();
+   await api.saveQuestion(state.user.uid,q);
+   if(continued)resetQuestionForm(document.querySelector('form[data-form="question"]'),drafts,type);
+   else{if(document.activeElement?.closest('form[data-form="question"]'))document.activeElement.blur();clearDrafts('q-');}
    if(continued){state.editing={type,genreId:q.genreId,text:'',answer:type==='tf'?'true':'',difficulty:10,options:['','','','']};}
    else{state.page=await api.questionPage(state.user.uid);state.screen='questions';}state.notice='問題を保存しました。';break;
   }
