@@ -55,6 +55,27 @@ test('Firebase adapter: provisioned code login → authoring → room → answer
   await assert.rejects(api.prepareGamePool(host.uid,randomConfig,2,{[consumed.id]:true}),/現在4ジャンル/);
   const manual=await api.prepareGamePool(host.uid,{...config,type:'panel',genres:completeGenres},2,{});
   assert.deepEqual(manual.config.genres,completeGenres);assert.equal(manual.pool.length,15);
+  const duplicateGenres=[completeGenres[0],completeGenres[0],...completeGenres.slice(1,4)];
+  const shortage=await api.prepareGamePool(host.uid,{...config,type:'panel',genres:duplicateGenres},2,{});
+  assert.equal(shortage.pool.filter(q=>q.genreId===completeGenres[0]).length,3);
+  for(const difficulty of [10,20,30])await api.saveQuestion(host.uid,{type:'panel',text:`second copy ${difficulty}`,answer:'答',genreId:completeGenres[0],difficulty});
+  const duplicated=await api.prepareGamePool(host.uid,{...config,type:'panel',genres:duplicateGenres},2,{});
+  assert.equal(duplicated.pool.length,15);assert.equal(new Set(duplicated.pool.map(q=>q.id)).size,15);
+  for(let i=0;i<4;i++){
+   await api.saveQuestion(host.uid,{type:'tf',text:`custom tf ${i}`,answer:'true',genreId:'',difficulty:0});
+   await api.saveQuestion(host.uid,{type:'choice',text:`custom choice ${i}`,options:['正解','誤答1','誤答2','誤答3'],genreId:genre.id,difficulty:0});
+   await api.saveQuestion(host.uid,{type:'buzz',text:`custom buzz ${i}`,answer:'答',genreId:'',difficulty:0});
+  }
+  const customRound=await api.prepareGamePool(host.uid,{...randomConfig,roundCounts:{tf:1,choice:2,buzz:3}},2,{});
+  assert.equal(customRound.pool.filter(q=>q.type==='tf').length,1);assert.equal(customRound.pool.filter(q=>q.type==='choice').length,2);assert.equal(customRound.pool.filter(q=>q.type==='buzz').length,3);
+  const countName=`集計-${crypto.randomUUID()}`;await api.createGenre(host.uid,countName);const countGenre=(await api.genres()).find(g=>g.name===countName);
+  for(let i=0;i<31;i++)await api.saveQuestion(host.uid,{type:'panel',text:`集計 ${String(i).padStart(2,'0')}`,answer:'答',genreId:countGenre.id,difficulty:i<11?10:i<20?20:30});
+  const filter={type:'panel',genreId:countGenre.id,search:'集計'};
+  const first=await api.questionPage(host.uid,null,filter);assert.equal(first.items.length,25);assert.deepEqual(first.panelCounts,{10:11,20:9,30:11});
+  const nextPage=await api.questionPage(host.uid,first.cursor,first.filters);assert.equal(nextPage.items.length,6);assert.deepEqual(nextPage.panelCounts,first.panelCounts);
+  const twenties=await api.questionPage(host.uid,null,{...filter,difficulty:'20'});assert.equal(twenties.items.length,9);assert.deepEqual(twenties.panelCounts,{10:0,20:9,30:0});
+  const prefix=await api.panelQuestionCounts(host.uid,{...filter,search:'集計 0'});assert.deepEqual(prefix,{10:10,20:0,30:0});
+  assert.deepEqual(await api.panelQuestionCounts(host.uid,{type:'tf'}),{10:0,20:0,30:0});
   await api.closeRoom(code);assert.equal(await api.readRoom(code,'meta'),null);
  }catch(e){console.error('SERVICE TEST FAILURE',e);throw e;}finally{try{goOffline(getDatabase(getApp()));await deleteApp(getApp());}catch{}await vite.close();await deleteAdminApp(admin);}
 });

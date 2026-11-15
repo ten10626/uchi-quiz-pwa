@@ -1,6 +1,6 @@
 # うちクイズ — 身内向けリアルタイム・クイズPWA
 
-スマホで司会／回答、○×・4択・早押し・パネル、単独／固定ラウンド制に対応するFirebase Spark用の初期実装です。フロントエンドはGitHub Pagesに配信します。Firebase Functions・Storage・課金設定は使用しません。
+スマホで司会／回答、○×・4択・早押し・パネル、単独／ラウンド制に対応するFirebase Spark用の初期実装です。フロントエンドはGitHub Pagesに配信します。Firebase Functions・Storage・課金設定は使用しません。
 
 **状態：本番インフラ設定・GitHub Pages公開済み。** 公開先は [うちクイズ](https://ten10626.github.io/uchi-quiz-pwa/)、ソースは [ten10626/uchi-quiz-pwa](https://github.com/ten10626/uchi-quiz-pwa) です。iPhone／Androidの実機確認、ホーム画面追加、画面の目視確認は未完了です。詳細は [検証記録](docs/VALIDATION.md) と [本番環境記録](docs/DEPLOYMENT.md) を参照してください。
 
@@ -24,7 +24,7 @@ docs/                    設計と検証記録
 
 ## 1. 必要なもの
 
-- Node.js 22.12以上（この実装は24.15で検証）、npm。
+- Node.js 24.15以上（24系LTSで検証）、npm。
 - Firebaseプロジェクト（Sparkのまま。請求先を接続しない）。
 - GitHubリポジトリとGitHub Pagesが使用できるアカウント／リポジトリ設定。
 - ルールテストを実行するPCにはJava 21以上。アプリの利用者には不要です。
@@ -201,3 +201,10 @@ VITE_USE_EMULATORS=true
 - ホストの音はWeb Audioを使いますが、端末のミュートやブラウザの自動再生制限に依存します。実機で音の確認が必要です。
 
 公式資料：[料金](https://firebase.google.com/pricing)、[Firestore上限](https://firebase.google.com/docs/firestore/quotas)、[RTDB接続上限](https://firebase.google.com/docs/database/faq-and-troubleshooting)、[presence/onDisconnect](https://firebase.google.com/docs/database/web/offline-capabilities)、[Authパスワード認証](https://firebase.google.com/docs/auth/web/password-auth)、[RTDB Rules](https://firebase.google.com/docs/database/security/core-syntax)、[Firestore Rulesの原子的検証](https://firebase.google.com/docs/firestore/security/rules-conditions)。
+
+## 2026-11-16の更新
+
+- ラウンド制の○×・4択・早押しは、それぞれ1問以上で設定可能（初期値6／6／8）。パネルは1人2回のまま。
+- 手動パネルは同じジャンルを複数列に設定可能。2列なら各10／20／30の未使用問題が2件ずつ必要。盤面は「科学①」「科学②」と表示し、同じ問題IDを重複配置しない。ランダム選択は異なる5ジャンルのまま。
+- 問題一覧に○×の正解設定とパネルの点数を表示。点数別件数は検索・絞り込みに一致する全件の集計で、ページ内件数ではない。
+- 入力欄を保持して画面更新し、日本語変換中の更新と選択欄の再フォーカスを防止。

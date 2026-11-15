@@ -50,3 +50,40 @@ test('resolved random round setup freezes all 15 cells and is compatible with ma
  assert.ok(s.rounds[3].board.every(cell=>!s.used[cell.question.id]));
  assert.deepEqual(checkPool({...resolved,panelGenreMode:'manual'},players,pool),[]);
 });
+
+test('round problem counts are configurable per format and legacy defaults remain 6/6/8',()=>{
+ const rounds=schedule(config('tf',{mode:'round',roundCounts:{tf:1,choice:3,buzz:2}}),players);
+ assert.deepEqual(rounds.map(r=>r.count),[1,3,2,4]);
+ for(const count of [0,-1,1.5,NaN])assert.throws(()=>schedule(config('tf',{mode:'round',roundCounts:{tf:count}}),players),/問題数/);
+ assert.deepEqual(schedule({mode:'round'},players).slice(0,3).map(r=>r.count),[6,6,8]);
+});
+test('custom round counts drive availability checks and the completed statistics',()=>{
+ const settings=config('tf',{mode:'round',roundCounts:{tf:1,choice:2,buzz:3}});
+ const pool=[q('tf','one-tf'),q('choice','one-choice'),q('choice','two-choice'),...Array.from({length:3},(_,i)=>q('buzz',`buzz-${i}`)),...panels()];
+ assert.deepEqual(checkPool(settings,players,pool),[]);
+ assert.ok(checkPool({...settings,roundCounts:{tf:2,choice:2,buzz:3}},players,pool).some(message=>message.includes('○×')));
+ let s=startGame(null,settings,players,pool,'custom');
+ while(s.phase!=='finished'){
+  if(s.phase==='board')s=step(s,'selectPanel',{cell:s.rounds[s.round].board.findIndex(c=>!c.selected)});
+  if(s.current.type==='buzz')s=step(s,'buzzEnd');else{s=s.phase==='prepared'?step(s,'open'):s;s=step(step(s,'close'),'reveal',{answers:{},correct:[]});}
+  s=step(s,'next');
+ }
+ assert.equal(ownResults(s,'p1').incorrect,10);assert.equal(ownResults(s,'p1').breakdown.choice.incorrect,2);
+});
+test('duplicate manual panel columns use separate question IDs for every point category',()=>{
+ const genreIds=['a','a','b','c','d'];
+ const pool=[...panelGenre('a'),...panelGenre('a').map(q=>({...q,id:q.id+'-second'})),...['b','c','d'].flatMap(panelGenre)];
+ const s=startGame(null,config('panel',{genres:genreIds}),players,pool,'duplicated');
+ const board=s.rounds[0].board;
+ assert.equal(board.length,15);assert.equal(new Set(board.map(c=>c.question.id)).size,15);
+ assert.deepEqual(board.filter(c=>c.genreId==='a').map(c=>c.occurrence),[1,1,1,2,2,2]);
+ assert.ok(board.filter(c=>c.genreId==='a').every(c=>c.instances===2));assert.equal(Object.keys(s.used).length,0);
+ const publicBoard=publicView(s).board;assert.equal(publicBoard[3].occurrence,2);assert.ok(!JSON.stringify(publicBoard).includes('secret'));
+ assert.ok(checkPool(config('panel',{genres:genreIds}),players,pool,{'a-20-second':true}).some(message=>message.includes('20')&&message.includes('2問必要')));
+});
+test('five columns may use one genre only when all 15 assigned IDs are distinct',()=>{
+ const pool=Array.from({length:5},(_,i)=>panelGenre('a').map(q=>({...q,id:q.id+'-'+i}))).flat();
+ const settings=config('panel',{genres:Array(5).fill('a')});
+ const s=startGame(null,settings,players,pool,'one-genre');assert.equal(new Set(s.rounds[0].board.map(c=>c.question.id)).size,15);
+ assert.throws(()=>startGame(null,settings,players,Array(5).fill(panelGenre('a')).flat(),'bad'),/5問必要/);
+});

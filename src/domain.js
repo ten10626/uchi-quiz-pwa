@@ -29,9 +29,28 @@ export function validateQuestion(q) {
   if (q.type === 'panel') ensure([10, 20, 30].includes(q.difficulty), '難度を選んでください。');
   return q;
 }
+export function getRoundCounts(config) {
+  const counts = { tf:config.roundCounts?.tf ?? 6, choice:config.roundCounts?.choice ?? 6, buzz:config.roundCounts?.buzz ?? 8 };
+  for (const [type,count] of Object.entries(counts)) ensure(Number.isSafeInteger(count) && count >= 1, `${TYPES[type]}の問題数は1以上の整数です。`);
+  return counts;
+}
+export function panelColumns(genres) {
+  const totals = new Map(), seen = new Map();
+  for (const id of genres || []) totals.set(id,(totals.get(id)||0)+1);
+  return (genres || []).map((genreId,column)=>{
+    const occurrence=(seen.get(genreId)||0)+1;seen.set(genreId,occurrence);
+    return { genreId,column,occurrence,instances:totals.get(genreId) };
+  });
+}
+function uniqueQuestions(questions) { return [...new Map(questions.map(q=>[q.id,q])).values()]; }
+function makePanelBoard(genres, available, random) {
+  const buckets=new Map();
+  for(const genreId of new Set(genres))for(const difficulty of [10,20,30])buckets.set(`${genreId}:${difficulty}`,shuffle(uniqueQuestions(available.filter(q=>q.type==='panel' && q.genreId===genreId && q.difficulty===difficulty)),random));
+  return panelColumns(genres).flatMap(column=>[10,20,30].map(difficulty=>({ ...column,difficulty,question:copy(buckets.get(`${column.genreId}:${difficulty}`).shift()),selected:false })));
+}
 export function schedule(config, players) {
   ensure(players.length >= 2 && players.length <= 7 && new Set(players).size === players.length, '回答者は2〜7人です。');
-  if (config.mode === 'round') return [{ type: 'tf', count: 6 }, { type: 'choice', count: 6 }, { type: 'buzz', count: 8 }, { type: 'panel', count: players.length * 2, cycles: 2 }];
+  if (config.mode === 'round') { const counts=getRoundCounts(config);return [{type:'tf',count:counts.tf},{type:'choice',count:counts.choice},{type:'buzz',count:counts.buzz},{type:'panel',count:players.length*2,cycles:2}]; }
   ensure(Object.hasOwn(TYPES, config.type), '形式を選んでください。');
   if (config.type === 'panel') {
     ensure(Number.isInteger(config.cycles) && config.cycles >= 1 && config.cycles <= Math.floor(15 / players.length), '選択周回数が範囲外です。');
@@ -42,15 +61,18 @@ export function schedule(config, players) {
 }
 export function checkPool(config, players, pool, used = {}) {
   const missing = [], plan = schedule(config, players);
-  const available = pool.filter(q => !used[q.id]);
+  const available = uniqueQuestions(pool.filter(q => !used[q.id]));
   for (const round of plan) {
     if (round.type !== 'panel') {
       const count = available.filter(q => q.type === round.type).length;
       if (count < round.count) missing.push(`${TYPES[round.type]}：${round.count}問必要（未使用${count}問）`);
     } else {
-      ensure(config.genres?.length === 5 && new Set(config.genres).size === 5, '異なる5ジャンルを選んでください。');
-      for (const genre of config.genres) for (const difficulty of [10, 20, 30]) {
-        if (!available.some(q => q.type === 'panel' && q.genreId === genre && q.difficulty === difficulty)) missing.push(`パネル：${genre} / ${difficulty} が不足`);
+      ensure(config.genres?.length === 5 && config.genres.every(Boolean), 'パネルの5列すべてのジャンルを選んでください。');
+      const columns=panelColumns(config.genres);
+      for (const genre of new Set(config.genres)) for (const difficulty of [10, 20, 30]) {
+        const required=columns.find(column=>column.genreId===genre).instances;
+        const count=available.filter(q=>q.type==='panel' && q.genreId===genre && q.difficulty===difficulty).length;
+        if(count < required)missing.push(`パネル：${genre} / ${difficulty} は${required}問必要（未使用${count}問）`);
       }
     }
   }
@@ -60,10 +82,10 @@ export function startGame(previous, config, players, pool, gameId, random = Math
   const used = previous?.used || {};
   const missing = checkPool(config, players, pool, used);
   ensure(!missing.length, missing.join('\n'));
-  const available = pool.filter(q => !used[q.id]);
+  const available = uniqueQuestions(pool.filter(q => !used[q.id]));
   const plan = schedule(config, players);
   const rounds = plan.map(round => round.type === 'panel'
-    ? { ...round, board: config.genres.flatMap(genreId => [10, 20, 30].map(difficulty => ({ genreId, difficulty, question: copy(shuffle(available.filter(q => q.type === 'panel' && q.genreId === genreId && q.difficulty === difficulty), random)[0]), selected: false }))) }
+    ? { ...round, board: makePanelBoard(config.genres, available, random) }
     : { ...round, questions: shuffle(available.filter(q => q.type === round.type), random).slice(0, round.count).map(copy) });
   const state = { gameId, config: copy(config), players: [...players], rounds, round: 0, index: 0, completed: {}, used: copy(used), scores: Object.fromEntries(players.map(uid => [uid, 0])), stats: Object.fromEntries(players.map(uid => [uid, {}])), turns: Object.fromEntries(players.map(uid => [uid, 0])), nextSelector: players[0], revision: (previous?.revision || 0) + 1, phase: 'prepared', paused: false, deadline: 0, remaining: 0, current: null };
   return prepare(state, random);
@@ -170,7 +192,7 @@ export function publicView(s) {
     mode: s.config.mode, type: s.rounds[s.round]?.type || '', roundCount: s.rounds[s.round]?.count || 0,
     deadline: s.deadline || 0, nextSelector: s.nextSelector || '', turns: s.turns,
     buzzInput: s.config.buzzInput || 'oral',
-    board: s.rounds[s.round]?.type === 'panel' ? s.rounds[s.round].board.map(({ genreId, difficulty, selected }) => ({ genreId, difficulty, selected })) : [],
+    board: s.rounds[s.round]?.type === 'panel' ? s.rounds[s.round].board.map(({ genreId, difficulty, selected, column, occurrence, instances }) => ({ genreId, difficulty, selected, ...(column!==undefined?{column,occurrence,instances}:{}) })) : [],
     current: c ? { token: c.token, type: c.type, text: c.type === 'buzz' && !revealed ? '' : c.text, choices: c.choices || [], banned: c.banned || {}, winner: c.winner || '', epoch: c.epoch || 0, ...(revealed ? { answer: c.answer } : {}) } : null
   };
 }

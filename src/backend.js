@@ -1,9 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
-import { getFirestore, doc, collection, getDoc, getDocs, query, orderBy, limit, startAfter, startAt, endAt, where, runTransaction as fsTransaction, connectFirestoreEmulator } from 'firebase/firestore';
+import { getFirestore, doc, collection, getDoc, getDocs, getCountFromServer, query, orderBy, limit, startAfter, startAt, endAt, where, runTransaction as fsTransaction, connectFirestoreEmulator } from 'firebase/firestore';
 import { getDatabase, ref, get, set, update, remove, onValue, onDisconnect, serverTimestamp, runTransaction, connectDatabaseEmulator } from 'firebase/database';
 import { credentials, nameKey } from './identity.js';
-import { validateQuestion, reduceGame, startGame, publicView, ownResults, selectRandomPanelGenres } from './domain.js';
+import { validateQuestion, reduceGame, startGame, publicView, ownResults, selectRandomPanelGenres, getRoundCounts } from './domain.js';
 const env = import.meta.env;
 export const configured = ['VITE_FIREBASE_API_KEY','VITE_FIREBASE_AUTH_DOMAIN','VITE_FIREBASE_PROJECT_ID','VITE_FIREBASE_DATABASE_URL','VITE_FIREBASE_APP_ID'].every(key=>!!env[key]);
 let auth, fs, db;
@@ -53,16 +53,29 @@ export async function changeGenre(id, newName) {
     }
   });
 }
-export async function questionPage(uid, cursor, filters = {}) {
-  const clauses = [];
-  for (const key of ['type','genreId','difficulty']) if (filters[key]) clauses.push(where(key,'==',key==='difficulty'?Number(filters[key]):filters[key]));
+function questionQuery(uid,filters={},cursor=null,pageSize=null) {
+  const clauses=[];
+  for(const key of ['type','genreId','difficulty'])if(filters[key])clauses.push(where(key,'==',key==='difficulty'?Number(filters[key]):filters[key]));
   clauses.push(orderBy('searchText'),orderBy('__name__'));
-  const prefix = (filters.search || '').toLowerCase();
-  if (cursor) clauses.push(startAfter(cursor)); else if (prefix) clauses.push(startAt(prefix));
-  if (prefix) clauses.push(endAt(prefix+'\uf8ff'));
-  clauses.push(limit(25));
-  const page = await getDocs(query(collection(fs, 'users', uid, 'questions'), ...clauses));
-  return { items: page.docs.map(d => ({ id: d.id, ...d.data() })), cursor: page.docs.at(-1), more: page.size === 25 };
+  const prefix=(filters.search || '').toLowerCase();
+  if(cursor)clauses.push(startAfter(cursor));else if(prefix)clauses.push(startAt(prefix));
+  if(prefix)clauses.push(endAt(prefix+'\uf8ff'));
+  if(pageSize)clauses.push(limit(pageSize));
+  return query(collection(fs,'users',uid,'questions'),...clauses);
+}
+export async function panelQuestionCounts(uid,filters={}) {
+  const counts={10:0,20:0,30:0};
+  if(filters.type && filters.type!=='panel')return counts;
+  await Promise.all([10,20,30].map(async difficulty=>{
+    if(filters.difficulty && Number(filters.difficulty)!==difficulty)return;
+    const result=await getCountFromServer(questionQuery(uid,{...filters,type:'panel',difficulty}));
+    counts[difficulty]=result.data().count;
+  }));
+  return counts;
+}
+export async function questionPage(uid,cursor,filters={}) {
+  const [page,panelCounts]=await Promise.all([getDocs(questionQuery(uid,filters,cursor,25)),panelQuestionCounts(uid,filters)]);
+  return {items:page.docs.map(d=>({id:d.id,...d.data()})),cursor:page.docs.at(-1),more:page.size===25,panelCounts,filters:{...filters}};
 }
 export async function saveQuestion(uid, question, deleting = false) {
   if (!deleting) validateQuestion(question);
@@ -86,8 +99,14 @@ export async function saveQuestion(uid, question, deleting = false) {
   });
 }
 export async function drawPool(uid, config, playerCount, used) {
-  const requests = config.mode === 'round' ? [['tf', 6], ['choice', 6], ['buzz', 8]] : config.type === 'panel' ? [] : [[config.type, config.count]];
-  if (config.mode === 'round' || config.type === 'panel') for (const gid of config.genres) for (const difficulty of [10, 20, 30]) requests.push(['panel', 1, gid, difficulty]);
+  const counts=config.mode==='round'?getRoundCounts(config):null;
+  const requests=counts?Object.entries(counts):config.type==='panel'?[]:[[config.type,config.count]];
+  if(config.mode==='round' || config.type==='panel'){
+    for(const gid of new Set(config.genres)){
+      const needed=config.genres.filter(id=>id===gid).length;
+      for(const difficulty of [10,20,30])requests.push(['panel',needed,gid,difficulty]);
+    }
+  }
   const pools = await Promise.all(requests.map(async ([type, count, gid, difficulty]) => {
     const filters = [where('type', '==', type)];
     if (gid) filters.push(where('genreId', '==', gid), where('difficulty', '==', difficulty));
