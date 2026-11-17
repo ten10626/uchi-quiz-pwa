@@ -1,9 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
-import { getFirestore, doc, collection, getDoc, getDocs, getCountFromServer, query, orderBy, limit, startAfter, startAt, endAt, where, runTransaction as fsTransaction, connectFirestoreEmulator } from 'firebase/firestore';
+import { getFirestore, doc, collection, getDoc, getDocs, getCountFromServer, query, orderBy, limit, startAfter, endAt, where, runTransaction as fsTransaction, connectFirestoreEmulator } from 'firebase/firestore';
 import { getDatabase, ref, get, set, update, remove, onValue, onDisconnect, serverTimestamp, runTransaction, connectDatabaseEmulator } from 'firebase/database';
 import { credentials, nameKey } from './identity.js';
-import { validateQuestion, reduceGame, startGame, publicView, ownResults, selectRandomPanelGenres, getRoundCounts } from './domain.js';
+import { matchesQuestionText,questionResultCounts,questionSearchKey,containsResultPage } from './search.js';
+import { validateQuestion, reduceGame, startGame, publicView, ownResults, selectRandomPanelGenres, getRoundCounts, canSkipQuestion, skipExclusions } from './domain.js';
 const env = import.meta.env;
 export const configured = ['VITE_FIREBASE_API_KEY','VITE_FIREBASE_AUTH_DOMAIN','VITE_FIREBASE_PROJECT_ID','VITE_FIREBASE_DATABASE_URL','VITE_FIREBASE_APP_ID'].every(key=>!!env[key]);
 let auth, fs, db;
@@ -57,15 +58,29 @@ function questionQuery(uid,filters={},cursor=null,pageSize=null) {
   const clauses=[];
   for(const key of ['type','genreId','difficulty','answer'])if(filters[key])clauses.push(where(key,'==',key==='difficulty'?Number(filters[key]):filters[key]));
   clauses.push(orderBy('searchText'),orderBy('__name__'));
-  const prefix=(filters.search || '').toLowerCase();
-  if(cursor)clauses.push(startAfter(cursor));else if(prefix)clauses.push(startAt(prefix));
-  if(prefix)clauses.push(endAt(prefix+'\uf8ff'));
+  if(cursor)clauses.push(startAfter(cursor));
   if(pageSize)clauses.push(limit(pageSize));
   return query(collection(fs,'users',uid,'questions'),...clauses);
+}
+function requireQuestionOwner(uid) {
+  if(auth.currentUser?.uid!==uid)throw Object.assign(new Error('自分の問題だけ検索できます。'),{code:'permission-denied'});
+}
+async function containsQuestions(uid,filters) {
+  requireQuestionOwner(uid);
+  const matches=[];let cursor=null;
+  for(;;){
+    const page=await getDocs(questionQuery(uid,{...filters,search:''},cursor,100));
+    for(const doc of page.docs){const item={id:doc.id,...doc.data()};if(matchesQuestionText(item,filters.search))matches.push(item);}
+    if(page.size<100)break;
+    cursor=page.docs.at(-1);
+  }
+  requireQuestionOwner(uid);
+  return matches;
 }
 export async function panelQuestionCounts(uid,filters={}) {
   const counts={10:0,20:0,30:0};
   if(filters.type && filters.type!=='panel')return counts;
+  if(filters.search)return questionResultCounts(await containsQuestions(uid,{...filters,type:'panel'})).panelCounts;
   await Promise.all([10,20,30].map(async difficulty=>{
     if(filters.difficulty && Number(filters.difficulty)!==difficulty)return;
     const result=await getCountFromServer(questionQuery(uid,{...filters,type:'panel',difficulty}));
@@ -76,6 +91,7 @@ export async function panelQuestionCounts(uid,filters={}) {
 export async function tfQuestionCounts(uid,filters={}) {
   const counts={true:0,false:0};
   if((filters.type && filters.type!=='tf') || filters.genreId || (filters.difficulty && Number(filters.difficulty)!==0))return counts;
+  if(filters.search)return questionResultCounts(await containsQuestions(uid,{...filters,type:'tf'})).tfCounts;
   await Promise.all(['true','false'].map(async answer=>{
     if(filters.answer && filters.answer!==answer)return;
     const result=await getCountFromServer(questionQuery(uid,{...filters,type:'tf',answer,genreId:'',difficulty:''}));
@@ -84,6 +100,12 @@ export async function tfQuestionCounts(uid,filters={}) {
   return counts;
 }
 export async function questionPage(uid,cursor,filters={}) {
+  if(filters.search){
+    requireQuestionOwner(uid);
+    const reusable=cursor?.kind==='contains' && cursor.key===questionSearchKey(uid,filters);
+    const matches=reusable?cursor.matches:await containsQuestions(uid,filters);
+    return containsResultPage(uid,filters,matches,reusable?cursor.offset:0);
+  }
   const [page,panelCounts,tfCounts]=await Promise.all([getDocs(questionQuery(uid,filters,cursor,25)),panelQuestionCounts(uid,filters),tfQuestionCounts(uid,filters)]);
   return {items:page.docs.map(d=>({id:d.id,...d.data()})),cursor:page.docs.at(-1),more:page.size===25,panelCounts,tfCounts,filters:{...filters}};
 }
@@ -117,7 +139,9 @@ export async function drawPool(uid, config, playerCount, used) {
       for(const difficulty of [10,20,30])requests.push(['panel',needed,gid,difficulty]);
     }
   }
-  const pools = await Promise.all(requests.map(async ([type, count, gid, difficulty]) => {
+  return (await Promise.all(requests.map(([type,count,gid,difficulty])=>drawCandidates(uid,type,count,used,gid,difficulty)))).flat();
+}
+async function drawCandidates(uid,type,count,used,gid,difficulty) {
     const filters = [where('type', '==', type)];
     if (gid) filters.push(where('genreId', '==', gid), where('difficulty', '==', difficulty));
     const result = [], seen = new Set(), pivot = Math.random();
@@ -134,8 +158,6 @@ export async function drawPool(uid, config, playerCount, used) {
       if (result.length >= count) break;
     }
     return result.slice(0, count);
-  }));
-  return pools.flat();
 }
 export async function prepareGamePool(uid, config, playerCount, used = {}) {
   if (config.mode !== 'round' || config.panelGenreMode !== 'random') {
@@ -216,6 +238,15 @@ export async function command(code, action, now = Date.now()) {
   const result = await runTransaction(ref(db, path(code, 'host')), state => reduceGame(state || initial, action, now), { applyLocally: false });
   if (!result.committed) throw new Error('進行を更新できませんでした。');
   const next = result.snapshot.val(); await publish(code, next); return next;
+}
+export async function skipQuestion(code,uid,expectedRevision,now=Date.now()) {
+  const state=await readRoom(code,'host');
+  if(!canSkipQuestion(state))throw new Error('未判定の問題だけスキップできます。');
+  if(expectedRevision!==undefined && expectedRevision!==state.revision)throw new Error('状態が更新されました。画面を確認してください。');
+  const current=state.current,excluded=skipExclusions(state);
+  const [question]=await drawCandidates(uid,current.type,1,excluded,current.type==='panel'?current.genreId:undefined,current.difficulty);
+  if(!question)throw new Error('差し替えられる予備の未使用問題がありません。現在の問題は変更していません。');
+  return command(code,{type:'skip',question,expectedRevision:state.revision},now);
 }
 export async function resetHistory(code) {
   const p = await readRoom(code, 'public'); if (p.phase !== 'waiting') throw new Error('待機中に操作してください。');

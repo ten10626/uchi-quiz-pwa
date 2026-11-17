@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { credentials, normalizeCode, nameKey } from '../src/identity.js';
-import { startGame, reduceGame, publicView, ownResults, ranking, schedule, checkPool, validateQuestion, selectRandomPanelGenres } from '../src/domain.js';
+import { startGame, reduceGame, publicView, ownResults, ranking, schedule, checkPool, validateQuestion, selectRandomPanelGenres, canSkipQuestion, skipExclusions } from '../src/domain.js';
 const players=['p1','p2'];
 const config=(type,extra={})=>({mode:'single',type,count:1,cycles:1,genres:['a','b','c','d','e'],timer:false,seconds:30,buzzInput:'text',...extra});
 const q=(type,id=type,extra={})=>({id,type,text:`${type} secret question`,answer:type==='tf'?'true':'secret answer',options:['正解','誤答1','誤答2','誤答3'],genreId:['choice','panel'].includes(type)?'a':'',difficulty:type==='panel'?10:0,...extra});
@@ -86,4 +86,40 @@ test('five columns may use one genre only when all 15 assigned IDs are distinct'
  const settings=config('panel',{genres:Array(5).fill('a')});
  const s=startGame(null,settings,players,pool,'one-genre');assert.equal(new Set(s.rounds[0].board.map(c=>c.question.id)).size,15);
  assert.throws(()=>startGame(null,settings,players,Array(5).fill(panelGenre('a')).flat(),'bad'),/5問必要/);
+});
+
+
+test('skip replaces every single format without consuming count, scores or panel turns',()=>{
+ for(const type of ['tf','choice','buzz','panel']){
+  let s=game(type,{timer:true});if(type==='panel')s=step(s,'selectPanel',{cell:0});else s=step(s,'open');
+  if(type==='buzz')s=step(s,'buzzWinner',{uid:'p1'});
+  const old=structuredClone(s), replacement=q(type,'spare',{genreId:s.current.genreId,difficulty:s.current.difficulty});
+  assert.equal(canSkipQuestion(s),true);s=step(s,'skip',{question:replacement});
+  assert.notEqual(s.current.token,old.current.token);assert.equal(s.current.id,'spare');
+  for(const key of ['index','round','stats','scores','completed','turns','nextSelector'])assert.deepEqual(s[key],old[key],key);
+  assert.equal(s.used[old.current.id],true);assert.equal(s.used.spare,true);assert.equal(s.deadline,0);
+  assert.ok(!publicView(s).current.answer);assert.equal(s.current.winner,undefined);
+  assert.throws(()=>step(s,'skip',{question:replacement}));
+  if(type==='buzz')s=step(s,'buzzEnd');else{if(s.phase==='prepared')s=step(s,'open');s=step(step(s,'close'),'reveal',{answers:{},correct:[]});}
+  assert.equal(ownResults(s,'p1').incorrect,1);assert.equal(canSkipQuestion(s),false);assert.throws(()=>step(s,'skip',{question:q(type,'third')}));
+ }
+});
+test('round skips preserve targets and exclude all future assignments, including panel cells',()=>{
+ const settings=config('tf',{mode:'round',roundCounts:{tf:1,choice:1,buzz:1}});
+ let s=startGame(null,settings,players,[q('tf'),q('choice'),q('buzz'),...panels()],'skip-round');
+ assert.equal(Object.keys(skipExclusions(s)).length,18);assert.throws(()=>step(s,'skip',{question:q('choice')}));
+ let serial=0;
+ while(s.phase!=='finished'){
+  if(s.phase==='board')s=step(s,'selectPanel',{cell:s.rounds[s.round].board.findIndex(c=>!c.selected)});
+  const c=s.current;
+  s=step(s,'skip',{question:q(c.type,`spare-${serial++}`,{genreId:c.genreId,difficulty:c.difficulty})});
+  if(c.type==='buzz')s=step(s,'buzzEnd');else{if(s.phase==='prepared')s=step(s,'open');s=step(step(s,'close'),'reveal',{answers:{},correct:[]});}
+  s=step(s,'next');
+ }
+ assert.equal(serial,7);assert.equal(ownResults(s,'p1').incorrect,7);assert.equal(Object.keys(s.used).length,14);
+});
+test('skip rejects paused games and mismatched panel genre or points without mutating state',()=>{
+ let s=step(game('panel'),'selectPanel',{cell:0});const before=structuredClone(s);
+ for(const extra of [{genreId:'wrong',difficulty:10},{genreId:s.current.genreId,difficulty:20}])assert.throws(()=>step(s,'skip',{question:q('panel','spare',extra)}));
+ assert.deepEqual(s,before);assert.throws(()=>step(step(s,'pause'),'skip',{question:q('panel','spare')}));
 });

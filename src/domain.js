@@ -108,6 +108,17 @@ function snapshot(q, token, random) {
   }
   return current;
 }
+export function canSkipQuestion(state) {
+  return !!state?.current && !state.paused && ['prepared','accepting','winner','closed'].includes(state.phase) && !state.completed?.[state.current.token];
+}
+export function skipExclusions(state) {
+  const excluded={...(state.used || {})};
+  for(const round of state.rounds || []){
+    for(const question of round.questions || [])excluded[question.id]=true;
+    for(const cell of round.board || [])excluded[cell.question.id]=true;
+  }
+  return excluded;
+}
 export function reduceGame(original, action, now = Date.now()) {
   const s = copy(original), c = s.current;
   s.used ||= {}; s.completed ||= {}; s.stats ||= {};
@@ -159,6 +170,22 @@ export function reduceGame(original, action, now = Date.now()) {
       ensure(s.phase === 'revealed', '先に判定を完了してください。'); s.index++;
       if (s.index >= s.rounds[s.round].count) { s.round++; s.index = 0; }
       prepare(s); break;
+    case 'skip': {
+      ensure(canSkipQuestion(s),'未判定の問題だけスキップできます。');
+      const question=validateQuestion(action.question);
+      ensure(typeof question.id==='string' && question.id && !skipExclusions(s)[question.id],'別の未使用問題が必要です。');
+      ensure(question.type===c.type,'同じ形式の問題が必要です。');
+      if(c.type==='panel'){
+        ensure(question.genreId===c.genreId && question.difficulty===c.difficulty,'同じジャンル・点数の問題が必要です。');
+        const cell=s.rounds[s.round].board.find(cell=>cell.question.id===c.id && cell.selected);
+        ensure(cell,'選択中のマスがありません。');cell.question=copy(question);
+      }else s.rounds[s.round].questions[s.index]=copy(question);
+      s.skips=(s.skips || 0)+1;
+      s.current=snapshot(question,`${s.gameId}-${s.round}-${s.index}-skip${s.skips}`,Math.random);
+      s.used[question.id]=true;s.deadline=0;s.remaining=0;
+      s.phase=c.type==='panel'?'accepting':'prepared';
+      break;
+    }
     case 'score': ensure(s.players.includes(action.uid) && Number.isSafeInteger(action.value), '整数の得点を入力してください。'); s.scores[action.uid] = action.value; break;
     case 'pause':
       if (s.paused) return s;

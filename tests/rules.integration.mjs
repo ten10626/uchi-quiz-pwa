@@ -14,7 +14,7 @@ const fs = uid => context(uid).firestore();
 const read = (uid,p) => get(ref(db(uid),p));
 const write = (uid,p,v) => set(ref(db(uid),p),v);
 const stamp = () => serverTimestamp();
-const room = (extra={})=>({meta:{host:'host',locked:true},members:{p1:{name:'一',slot:'s1'},p2:{name:'二',slot:'s2'}},slots:{s1:'p1',s2:'p2'},presence:{online:true,at:Date.now(),session:'test-session'},public:{phase:'accepting',paused:false,deadline:0,current:{token:'q1',type:'tf',epoch:0}},host:{phase:'accepting',scores:{p1:100,p2:0},secretAnswer:'true'},...extra});
+const room = (extra={})=>({meta:{host:'host',locked:true},members:{p1:{name:'一',slot:'s1'},p2:{name:'二',slot:'s2'}},slots:{s1:'p1',s2:'p2'},presence:{online:true,at:Date.now(),session:'test-session'},public:{phase:'accepting',paused:false,deadline:0,current:{token:'q1',type:'tf',epoch:0}},host:{phase:'accepting',current:{token:'q1'},scores:{p1:100,p2:0},secretAnswer:'true'},...extra});
 async function seed(value=room()) { await env.withSecurityRulesDisabled(async ctx=>{await set(ref(ctx.database()),{allowed:{host:true,p1:true,p2:true,other:true,admin:true},rooms:{[code]:value}});for(const uid of ['host','p1','p2','other','admin'])await setDoc(doc(ctx.firestore(),'members',uid),{name:uid,admin:uid==='admin'});await setDoc(doc(ctx.firestore(),'users','host','questions','private'),{type:'tf',text:'秘密',answer:'true',genreId:'',difficulty:0,random:.1,updatedAt:1});}); }
 async function submission(uid='p1',value='true',token='q1') { return update(ref(db(uid),base),{[`answers/${token}/${uid}`]:{value,at:stamp()},[`status/${token}/${uid}`]:true}); }
 async function force(p,v){await env.withSecurityRulesDisabled(ctx=>set(ref(ctx.database(),p),v));}
@@ -47,3 +47,11 @@ test('stale disconnect session cannot mark a restored host offline',async()=>{aw
 test('genre canonical UTF-8 key is enforced and Japanese rename retains stable ID',async()=>{await createGenre();const forged=writeBatch(fs('p1'));forged.set(doc(fs('p1'),'genreNames','fake'),{id:'forged'});forged.set(doc(fs('p1'),'genres','forged'),{name:'a',nameKey:'fake',owner:'p1',refs:0});await assertFails(forged.commit());const renamed='日本/文化',key=nameKey(renamed),valid=writeBatch(fs('host'));valid.delete(doc(fs('host'),'genreNames','61'));valid.set(doc(fs('host'),'genreNames',key),{id:'g'});valid.update(doc(fs('host'),'genres','g'),{name:renamed,nameKey:key});await assertSucceeds(valid.commit());assert.equal((await getDoc(doc(fs('p1'),'genres','g'))).data().name,renamed);});
 
 test('private host close or pause blocks writes before public projection catches up',async()=>{await force(`${base}/host/phase`,'closed');await assertFails(submission());await force(`${base}/host/phase`,'accepting');await force(`${base}/host/paused`,true);await assertFails(submission());});
+
+
+test('skip private token immediately rejects stale answers and buzz before public projection',async()=>{
+ await force(`${base}/host/current/token`,'q2');await assertFails(submission());
+ await force(`${base}/public/current/type`,'panel');await assertFails(submission('p1','text'));
+ await force(`${base}/public/current/type`,'buzz');await assertFails(write('p1',`${base}/buzz/q1`,{uid:'p1',epoch:0}));
+ await force(`${base}/public/current`,{token:'q2',type:'tf',epoch:0});await assertSucceeds(submission('p1','true','q2'));
+});
